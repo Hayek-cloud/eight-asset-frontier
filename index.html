@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Efficient Frontier — 8-Asset Mean-Variance Optimization</title>
+<style>
+  :root{
+    --navy:#0F1B2B; --panel:#16243A; --ink:#E9E4D8; --mute:#8FA0B8;
+    --mark:#C9622A; --line:#2A3B54;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--navy); color:var(--ink);
+    font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    padding:26px 18px 60px;
+  }
+  .wrap{max-width:1180px; margin:0 auto;}
+  h1{font-family:Georgia,'Iowan Old Style','Times New Roman',serif; font-size:27px; margin:0; font-weight:600;}
+  .eyebrow{font-size:12px; letter-spacing:.18em; color:#C9A15A; margin-bottom:8px; text-transform:uppercase;}
+  p.lede{color:var(--mute); max-width:640px; margin-top:8px; line-height:1.5; font-size:13.5px;}
+  .top{display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px; margin-bottom:20px;}
+  button#resetBtn{
+    background:transparent; border:1px solid var(--line); color:var(--mute);
+    border-radius:6px; padding:8px 14px; font-size:12.5px; cursor:pointer; font-family:inherit;
+  }
+  button#resetBtn:hover{color:var(--ink); border-color:var(--mute);}
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px;}
+  /* input table */
+  .table-wrap{overflow-x:auto; margin-bottom:24px;}
+  table{border-collapse:collapse; font-size:12px; white-space:nowrap;}
+  th,td{padding:4px 6px; text-align:right;}
+  th{color:var(--mute); font-weight:600; font-size:11px;}
+  th.rowhead, td.rowhead{text-align:left; font-weight:600; position:sticky; left:0; background:var(--panel); z-index:1;}
+  td input{
+    width:56px; background:rgba(255,255,255,0.04); border:1px solid var(--line);
+    color:var(--ink); border-radius:4px; padding:3px 5px; font-size:12px; text-align:right;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  td input:focus{outline:none; border-color:var(--mute);}
+  td input.diag{background:transparent; border-color:transparent; color:var(--mute); pointer-events:none;}
+  td input.invalid{border-color:#C0504D;}
+  th.corr-group{border-bottom:1px solid var(--line); text-align:center; color:var(--mute);}
+  .warn{color:#E0A458; font-size:12px; margin:-14px 0 16px; min-height:16px;}
+  /* layout below table */
+  .grid{display:grid; grid-template-columns:230px 1fr; gap:26px;}
+  @media (max-width:820px){ .grid{grid-template-columns:1fr;} }
+  .section-label{font-size:12px; color:var(--ink); margin:6px 0 10px; letter-spacing:.06em; font-weight:600;}
+  .slider{margin-bottom:14px;}
+  .slider-row{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5px; font-size:12.5px; color:var(--mute);}
+  .slider-row span.val{font-family:ui-monospace,monospace; font-weight:600; color:var(--mark);}
+  input[type=range]{width:100%; height:4px; cursor:pointer; accent-color:var(--mark);}
+  .toggle-row{display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:12.5px; color:var(--mute);}
+  .toggle-row input{width:16px; height:16px; accent-color:var(--mark); cursor:pointer;}
+  .toggle-note{font-size:11px; color:var(--mute); margin:0 0 16px; line-height:1.4;}
+  .chart-caption{font-size:12px; color:var(--mute); margin-bottom:6px;}
+  .stats{display:flex; gap:8px; margin:14px 0 22px; flex-wrap:wrap;}
+  .stat-box{border:1px solid var(--line); border-radius:6px; padding:6px 10px; background:rgba(255,255,255,0.02); min-width:88px;}
+  .stat-box .lab{font-size:9.5px; text-transform:uppercase; letter-spacing:.05em;}
+  .stat-box .num{font-family:ui-monospace,monospace; font-size:14px; color:var(--ink);}
+  .stat-box.portfolio{border-color:var(--mark); min-width:150px;}
+  .legend{display:flex; gap:12px; flex-wrap:wrap; font-size:11px; color:var(--mute); margin-top:6px;}
+  .legend span.sw{display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:4px; vertical-align:middle;}
+  svg text{font-family:ui-sans-serif,system-ui,sans-serif;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <div class="eyebrow">Mean-Variance Optimization — 8 Asset Classes</div>
+      <h1>Live Efficient Frontier</h1>
+      <p class="lede">Edit any number in the assumptions table — returns, standard deviations, maximum weights, or correlations (the matrix stays symmetric automatically). The frontier re-solves instantly via an exact active-set quadratic program. No Solver, no add-ins.</p>
+    </div>
+    <button id="resetBtn">Reset to defaults</button>
+  </div>
+
+  <div class="panel table-wrap"><div id="inputTable"></div></div>
+  <div class="warn" id="warnBox"></div>
+
+  <div class="grid">
+    <div class="panel" style="align-self:start">
+      <div class="section-label">CONSTRAINTS</div>
+      <div class="toggle-row"><input type="checkbox" id="allowShort"><label for="allowShort">Allow short selling</label></div>
+      <div class="toggle-note">Off: weights bounded [0%, max]. On: weights bounded [&minus;100%, max].</div>
+      <div class="section-label">TARGET RETURN</div>
+      <div class="slider">
+        <div class="slider-row"><span>Target return</span><span class="val" id="targetRet_val"></span></div>
+        <input type="range" id="targetRet" min="0" max="20" step="0.05">
+      </div>
+    </div>
+
+    <div>
+      <div class="chart-caption">Efficient frontier — ◆ pure assets, ● min-variance portfolio, ★ current target</div>
+      <svg id="frontierChart" width="100%" height="300" viewBox="0 0 720 300" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="stats" id="statsRow"></div>
+      <div class="chart-caption">Optimal weights along the frontier (low target return → high target return)</div>
+      <svg id="weightChart" width="100%" height="200" viewBox="0 0 720 200" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="legend" id="legendRow"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const NAMES = ['Domestic Equity','International Equity','Emerging Market Equity','Absolute Return','Real Assets','Private Equity Buyout','Venture Capital','Fixed Income'];
+const SHORT = ['Dom Eq','Intl Eq','EM Eq','Abs Ret','Real','PE Buyout','VC','Fixed Inc'];
+const ASSET_COLORS = ['#C9A15A','#4FB3A9','#B0648F','#93B788','#7C93B0','#C0504D','#8E7CC3','#5B87A6'];
+const MARK='#C9622A', MUTE='#8FA0B8', LINE='#2A3B54', INK='#E9E4D8';
+const N = 8;
+const EPS = 1e-9;
+
+const DEFAULT_MU = [7.0, 6.0, 9.0, 5.0, 7.0, 11.5, 14.0, 2.5];
+const DEFAULT_SD = [20.0, 20.0, 27.0, 10.0, 20.0, 25.0, 35.0, 10.0];
+const DEFAULT_MAXW = [100,100,100,100,100,100,100,100];
+const DEFAULT_RHO = [
+  [1.00,0.85,0.75,0.30,0.50,0.80,0.70,0.15],
+  [0.85,1.00,0.75,0.30,0.50,0.70,0.60,0.15],
+  [0.75,0.75,1.00,0.20,0.40,0.55,0.60,0.00],
+  [0.30,0.30,0.20,1.00,0.25,0.30,0.30,0.10],
+  [0.50,0.50,0.40,0.25,1.00,0.30,0.15,0.35],
+  [0.80,0.70,0.55,0.30,0.30,1.00,0.60,0.20],
+  [0.70,0.60,0.60,0.30,0.15,0.60,1.00,0.15],
+  [0.15,0.15,0.00,0.10,0.35,0.20,0.15,1.00],
+];
+
+let state = {
+  mu: DEFAULT_MU.slice(),
+  sd: DEFAULT_SD.slice(),
+  maxw: DEFAULT_MAXW.slice(),
+  rho: DEFAULT_RHO.map(r=>r.slice()),
+  allowShort: false,
+  targetRet: 7.0
+};
+
+// ---------- linear algebra (general n) ----------
+function gaussSolve(A, b){
+  const n = b.length;
+  const M = A.map((row,i)=>row.concat([b[i]]));
+  for(let col=0; col<n; col++){
+    let piv = col;
+    for(let r=col+1; r<n; r++) if (Math.abs(M[r][col])>Math.abs(M[piv][col])) piv=r;
+    if (Math.abs(M[piv][col])<1e-12) return null;
+    [M[col],M[piv]] = [M[piv],M[col]];
+    for(let r=0; r<n; r++){
+      if (r===col) continue;
+      const f = M[r][col]/M[col][col];
+      for(let c=col; c<=n; c++) M[r][c]-=f*M[col][c];
+    }
+  }
+  return M.map((row,i)=>row[n]/row[i]);
+}
+function buildSigma(sd, rho){
+  const S = [];
+  for(let i=0;i<N;i++){
+    S.push([]);
+    for(let j=0;j<N;j++) S[i].push(rho[i][j]*sd[i]*sd[j]);
+  }
+  return S;
+}
+function choleskyOK(S){
+  const L = S.map(r=>r.slice());
+  for(let i=0;i<N;i++){
+    for(let j=0;j<=i;j++){
+      let sum = L[i][j];
+      for(let k=0;k<j;k++) sum -= L[i][k]*L[j][k];
+      if (i===j){
+        if (sum <= 1e-10) return false;
+        L[i][i] = Math.sqrt(sum);
+      } else {
+        L[i][j] = sum / L[j][j];
+      }
+    }
+  }
+  return true;
+}
+function quadForm(S, w){
+  let s=0;
+  for(let i=0;i<N;i++) for(let j=0;j<N;j++) s+=w[i]*w[j]*S[i][j];
+  return s;
+}
+
+// ---------- active-set QP: min w'Sw  s.t. 1'w=1, mu'w=R, lb<=w<=ub ----------
+// Fast path: greedy active-set iteration (usually a handful of KKT solves).
+// Robust fallback: exact enumeration of all 3^N active-set configurations,
+// guaranteed to find the global optimum of this convex QP if one exists.
+function solveEqualityKKT(Sigma, mu, R, active, lb, ub){
+  const freeIdx = [];
+  for(let i=0;i<N;i++) if (!(i in active)) freeIdx.push(i);
+  const nf = freeIdx.length;
+  const w = new Array(N).fill(0);
+  for(const i in active) w[i] = active[i]==='L' ? lb[i] : ub[i];
+  let lam1=0, lam2=0;
+  if (nf > 0){
+    const dim = nf + 2;
+    const A = Array.from({length:dim},()=>new Array(dim).fill(0));
+    const b = new Array(dim).fill(0);
+    for(let r=0;r<nf;r++){
+      const i = freeIdx[r];
+      for(let c=0;c<nf;c++) A[r][c] = 2*Sigma[i][freeIdx[c]];
+      A[r][nf] = -1;
+      A[r][nf+1] = -mu[i];
+      let rhs = 0;
+      for(const a in active) rhs -= 2*Sigma[i][a]*w[a];
+      b[r] = rhs;
+    }
+    let sumA=0, muA=0;
+    for(const a in active){ sumA += w[a]; muA += mu[a]*w[a]; }
+    for(let c=0;c<nf;c++){ A[nf][c]=1; A[nf+1][c]=mu[freeIdx[c]]; }
+    b[nf] = 1 - sumA;
+    b[nf+1] = R - muA;
+    const sol = gaussSolve(A,b);
+    if (!sol) return null;
+    for(let r=0;r<nf;r++) w[freeIdx[r]] = sol[r];
+    lam1 = sol[nf]; lam2 = sol[nf+1];
+  } else {
+    let s=0, m=0;
+    for(let i=0;i<N;i++){ s+=w[i]; m+=mu[i]*w[i]; }
+    if (Math.abs(s-1)>1e-6 || Math.abs(m-R)>1e-6) return null;
+  }
+  return { w, lam1, lam2, freeIdx };
+}
+function solveQPActiveSet(Sigma, mu, R, lb, ub, warmActive){
+  let active = warmActive ? Object.assign({}, warmActive) : {};
+  for(let iter=0; iter<200; iter++){
+    const kkt = solveEqualityKKT(Sigma, mu, R, active, lb, ub);
+    if (!kkt) return null; // singular path — caller falls back to enumeration
+    const { w, lam1, lam2, freeIdx } = kkt;
+
+    let worst=-1, worstAmt=1e-7, worstSide=null;
+    for(const i of freeIdx){
+      if (w[i] < lb[i]-1e-9 && lb[i]-w[i] > worstAmt){ worst=i; worstAmt=lb[i]-w[i]; worstSide='L'; }
+      if (w[i] > ub[i]+1e-9 && w[i]-ub[i] > worstAmt){ worst=i; worstAmt=w[i]-ub[i]; worstSide='U'; }
+    }
+    if (worst>=0){ active[worst]=worstSide; continue; }
+
+    let rel=-1, relAmt=1e-7;
+    for(const a in active){
+      const i = +a;
+      let g = -lam1 - lam2*mu[i];
+      for(let j=0;j<N;j++) g += 2*Sigma[i][j]*w[j];
+      if (active[a]==='L' && g < -relAmt){ rel=i; relAmt=-g; }
+      if (active[a]==='U' && g > relAmt){ rel=i; relAmt=g; }
+    }
+    if (rel>=0){ delete active[rel]; continue; }
+
+    return { w, ret:R, sd:Math.sqrt(Math.max(quadForm(Sigma,w),0)), active: Object.assign({}, active) };
+  }
+  return null;
+}
+// exact brute-force: enumerate every combination of {free, lower, upper} per asset
+function solveQPEnum(Sigma, mu, R, lb, ub){
+  let best = null, bestVar = Infinity;
+  const active = {};
+  function recurse(i){
+    if (i === N){
+      const kkt = solveEqualityKKT(Sigma, mu, R, active, lb, ub);
+      if (!kkt) return;
+      const { w } = kkt;
+      for(let k=0;k<N;k++){
+        if (w[k] < lb[k]-1e-7 || w[k] > ub[k]+1e-7) return; // infeasible candidate
+      }
+      const v = quadForm(Sigma, w);
+      if (v < bestVar){ bestVar = v; best = { w: w.slice(), active: Object.assign({}, active) }; }
+      return;
+    }
+    recurse(i+1);                    // free
+    active[i]='L'; recurse(i+1);     // at lower bound
+    active[i]='U'; recurse(i+1);     // at upper bound
+    delete active[i];
+  }
+  recurse(0);
+  if (!best) return null;
+  return { w: best.w, ret:R, sd:Math.sqrt(Math.max(bestVar,0)), active: best.active };
+}
+function solveQP(Sigma, mu, R, lb, ub, warmActive){
+  const fast = solveQPActiveSet(Sigma, mu, R, lb, ub, warmActive);
+  if (fast) return fast;
+  return solveQPEnum(Sigma, mu, R, lb, ub);
+}
+
+// exact achievable-return range under box + budget constraint (greedy LP)
+function achievableRange(mu, lb, ub){
+  function extreme(maximize){
+    const order = mu.map((m,i)=>[m,i]).sort((a,b)=> maximize ? b[0]-a[0] : a[0]-b[0]);
+    const w = lb.slice();
+    let mass = 1 - lb.reduce((a,b)=>a+b,0);
+    if (mass < -1e-9) return null;
+    for(const [,i] of order){
+      const add = Math.min(mass, ub[i]-lb[i]);
+      w[i]+=add; mass-=add;
+      if (mass<=1e-12) break;
+    }
+    if (mass>1e-9) return null;
+    return w.reduce((s,wi,i)=>s+wi*mu[i],0);
+  }
+  const hi = extreme(true), lo = extreme(false);
+  if (hi===null || lo===null) return null;
+  return { min:lo, max:hi };
+}
+
+function computeFrontier(st, forceShortEnvelope){
+  const short = forceShortEnvelope!==undefined ? forceShortEnvelope : st.allowShort;
+  const lb = new Array(N).fill(short ? -1 : 0);
+  const ub = st.maxw.map(v=>v/100);
+  const Sigma = buildSigma(st.sd, st.rho);
+  const range = achievableRange(st.mu, lb, ub);
+  if (!range) return { frontier:[], minRet:0, maxRet:0, Sigma, lb, ub };
+  const NP=160, frontier=[];
+  let warm = null;
+  for(let n=0;n<=NP;n++){
+    const R = range.min + (n/NP)*(range.max-range.min);
+    const sol = solveQP(Sigma, st.mu, R, lb, ub, warm);
+    if (sol){ frontier.push(sol); warm = sol.active; }
+  }
+  return { frontier, minRet:range.min, maxRet:range.max, Sigma, lb, ub };
+}
+
+// ---------- input table ----------
+function buildTable(){
+  let html = '<table><thead><tr>';
+  html += '<th class="rowhead">Asset Class</th><th>Real<br>Return</th><th>Std.<br>Dev.</th><th>Max<br>Weight</th>';
+  html += `<th class="corr-group" colspan="${N}">Correlations</th></tr>`;
+  html += '<tr><th class="rowhead"></th><th></th><th></th><th></th>';
+  for(let j=0;j<N;j++) html += `<th>${SHORT[j]}</th>`;
+  html += '</tr></thead><tbody>';
+  for(let i=0;i<N;i++){
+    html += `<tr><td class="rowhead" style="color:${ASSET_COLORS[i]}">${NAMES[i]}</td>`;
+    html += `<td><input id="mu_${i}" data-kind="mu" data-i="${i}" value="${state.mu[i].toFixed(1)}">%</td>`;
+    html += `<td><input id="sd_${i}" data-kind="sd" data-i="${i}" value="${state.sd[i].toFixed(1)}">%</td>`;
+    html += `<td><input id="mw_${i}" data-kind="mw" data-i="${i}" value="${state.maxw[i].toFixed(0)}">%</td>`;
+    for(let j=0;j<N;j++){
+      if (i===j) html += `<td><input class="diag" value="1.00" tabindex="-1" readonly></td>`;
+      else html += `<td><input id="rho_${i}_${j}" data-kind="rho" data-i="${i}" data-j="${j}" value="${state.rho[i][j].toFixed(2)}"></td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('inputTable').innerHTML = html;
+
+  document.querySelectorAll('#inputTable input:not(.diag)').forEach(inp=>{
+    inp.addEventListener('change', onCellChange);
+    inp.addEventListener('keydown', e=>{ if(e.key==='Enter') inp.blur(); });
+  });
+}
+function onCellChange(e){
+  const inp = e.target;
+  const kind = inp.dataset.kind, i = +inp.dataset.i;
+  let v = parseFloat(inp.value);
+  if (isNaN(v)){ inp.classList.add('invalid'); return; }
+  inp.classList.remove('invalid');
+  if (kind==='mu'){ state.mu[i]=v; inp.value=v.toFixed(1); }
+  else if (kind==='sd'){ v=Math.max(v,0.1); state.sd[i]=v; inp.value=v.toFixed(1); }
+  else if (kind==='mw'){ v=Math.min(Math.max(v,0),100); state.maxw[i]=v; inp.value=v.toFixed(0); }
+  else if (kind==='rho'){
+    const j = +inp.dataset.j;
+    v = Math.min(Math.max(v,-1),1);
+    state.rho[i][j]=v; state.rho[j][i]=v;
+    inp.value=v.toFixed(2);
+    const mirror = document.getElementById(`rho_${j}_${i}`);
+    if (mirror) mirror.value = v.toFixed(2);
+  }
+  update();
+}
+
+// ---------- chart helpers ----------
+function el(tag, attrs){
+  const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for(const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+function clearSvg(svg){ while(svg.firstChild) svg.removeChild(svg.firstChild); }
+function starPath(cx,cy,r){
+  const pts=[];
+  for(let i=0;i<10;i++){
+    const rad = i%2===0 ? r : r*0.45;
+    const ang = -Math.PI/2 + i*Math.PI/5;
+    pts.push([cx+rad*Math.cos(ang), cy+rad*Math.sin(ang)]);
+  }
+  return 'M'+pts.map(p=>p.join(',')).join('L')+'Z';
+}
+function diamondPath(cx,cy,r){ return `M${cx},${cy-r} L${cx+r},${cy} L${cx},${cy+r} L${cx-r},${cy} Z`; }
+function smoothPath(points){
+  if (points.length < 3) return 'M'+points.map(p=>p.join(',')).join('L');
+  let d = `M${points[0][0]},${points[0][1]}`;
+  for(let i=0;i<points.length-1;i++){
+    const p0 = points[i-1] || points[i];
+    const p1 = points[i];
+    const p2 = points[i+1];
+    const p3 = points[i+2] || p2;
+    d += ` C${p1[0]+(p2[0]-p0[0])/6},${p1[1]+(p2[1]-p0[1])/6} ${p2[0]-(p3[0]-p1[0])/6},${p2[1]-(p3[1]-p1[1])/6} ${p2[0]},${p2[1]}`;
+  }
+  return d;
+}
+function splitByActiveSet(frontier, lb, ub){
+  const sig = p => p.w.map((v,i)=>{
+    if (Math.abs(v-ub[i])<1e-4) return 'U';
+    if (Math.abs(v-lb[i])<1e-4) return 'L';
+    return '.';
+  }).join('');
+  const segments = [];
+  let cur = [], prevSig=null;
+  frontier.forEach(p=>{
+    const s = sig(p);
+    if (prevSig!==null && s!==prevSig){ segments.push(cur); cur=[cur[cur.length-1]]; }
+    cur.push(p); prevSig=s;
+  });
+  if (cur.length) segments.push(cur);
+  return segments;
+}
+
+function drawFrontier(d){
+  const svg = document.getElementById('frontierChart');
+  clearSvg(svg);
+  const W=720,H=300, ML=44, MR=16, MT=10, MB=34;
+  const { frontier, minVarPt, current, lb, ub, axisRetMin, axisRetMax, axisSdMax } = d;
+  const xs = sd => ML + (sd/axisSdMax)*(W-ML-MR);
+  const ys = ret => (H-MB) - ((ret-axisRetMin)/(axisRetMax-axisRetMin))*(H-MB-MT);
+  for(let g=0; g<=4; g++){
+    const gx = ML + g*(W-ML-MR)/4;
+    svg.appendChild(el('line',{x1:gx,y1:MT,x2:gx,y2:H-MB,stroke:LINE,'stroke-dasharray':'2 4'}));
+    const t = el('text',{x:gx, y:H-MB+16, fill:MUTE,'font-size':10,'text-anchor':'middle'});
+    t.textContent = (axisSdMax*g/4).toFixed(0)+'%'; svg.appendChild(t);
+  }
+  for(let g=0; g<=4; g++){
+    const gy = MT + g*(H-MB-MT)/4;
+    svg.appendChild(el('line',{x1:ML,y1:gy,x2:W-MR,y2:gy,stroke:LINE,'stroke-dasharray':'2 4'}));
+    const val = axisRetMin + (4-g)*(axisRetMax-axisRetMin)/4;
+    const t = el('text',{x:ML-8, y:gy+4, fill:MUTE,'font-size':10,'text-anchor':'end'});
+    t.textContent = val.toFixed(0)+'%'; svg.appendChild(t);
+  }
+  const lab = el('text',{x:(ML+W-MR)/2, y:H-4, fill:MUTE,'font-size':11,'text-anchor':'middle'});
+  lab.textContent = 'Portfolio std. dev (risk)'; svg.appendChild(lab);
+
+  if (frontier.length>1){
+    splitByActiveSet(frontier, lb, ub).forEach(seg=>{
+      if (seg.length<2) return;
+      const pts = seg.map(p=>[xs(p.sd), ys(p.ret)]);
+      svg.appendChild(el('path',{d:smoothPath(pts), fill:'none', stroke:MUTE,'stroke-width':1.5,'stroke-linecap':'round'}));
+    });
+  }
+  for(let i=0;i<N;i++){
+    svg.appendChild(el('path',{d:diamondPath(xs(state.sd[i]),ys(state.mu[i]),5), fill:ASSET_COLORS[i]}));
+  }
+  if (minVarPt) svg.appendChild(el('circle',{cx:xs(minVarPt.sd),cy:ys(minVarPt.ret),r:5,fill:INK}));
+  if (current) svg.appendChild(el('path',{d:starPath(xs(current.sd),ys(current.ret),9), fill:MARK}));
+}
+
+function drawWeights(d){
+  const svg = document.getElementById('weightChart');
+  clearSvg(svg);
+  const W=720,H=200, ML=38, MR=16, MT=8, MB=24;
+  const { frontier, axisRetMin, axisRetMax } = d;
+  if (frontier.length<2) return;
+  let yMin=0, yMax=1;
+  frontier.forEach(p=>{
+    let base=0;
+    for(let i=0;i<N;i++){
+      const t=base+p.w[i];
+      yMin=Math.min(yMin,base,t); yMax=Math.max(yMax,base,t);
+      base=t;
+    }
+  });
+  const pad=(yMax-yMin)*0.05||0.05; yMin-=pad; yMax+=pad;
+  const xs = ret => ML + ((ret-axisRetMin)/(axisRetMax-axisRetMin))*(W-ML-MR);
+  const ys = w => (H-MB) - ((w-yMin)/(yMax-yMin))*(H-MB-MT);
+  for(let i=0;i<N;i++){
+    const top=[], bot=[];
+    frontier.forEach(p=>{
+      let base=0;
+      for(let k=0;k<i;k++) base+=p.w[k];
+      bot.push([xs(p.ret), ys(base)]);
+      top.push([xs(p.ret), ys(base+p.w[i])]);
+    });
+    const dPath = 'M'+top.map(pt=>pt.join(',')).join('L')+'L'+bot.reverse().map(pt=>pt.join(',')).join('L')+'Z';
+    svg.appendChild(el('path',{d:dPath, fill:ASSET_COLORS[i],'fill-opacity':0.85}));
+  }
+  for(let g=0; g<=4; g++){
+    const val = yMin + g*(yMax-yMin)/4;
+    const t = el('text',{x:ML-6, y:ys(val)+4, fill:MUTE,'font-size':10,'text-anchor':'end'});
+    t.textContent = (val*100).toFixed(0)+'%'; svg.appendChild(t);
+  }
+  if (yMin<0 && yMax>0) svg.appendChild(el('line',{x1:ML,y1:ys(0),x2:W-MR,y2:ys(0),stroke:MUTE,'stroke-dasharray':'3 3'}));
+  for(let g=0; g<=4; g++){
+    const val = axisRetMin + g*(axisRetMax-axisRetMin)/4;
+    const t = el('text',{x:ML+g*(W-ML-MR)/4, y:H-6, fill:MUTE,'font-size':10,'text-anchor':'middle'});
+    t.textContent = val.toFixed(1)+'%'; svg.appendChild(t);
+  }
+}
+
+function drawStats(current){
+  const row = document.getElementById('statsRow');
+  if (!current){ row.innerHTML=''; return; }
+  let html = '';
+  for(let i=0;i<N;i++){
+    html += `<div class="stat-box"><div class="lab" style="color:${ASSET_COLORS[i]}">${SHORT[i]}</div><div class="num">${(current.w[i]*100).toFixed(1)}%</div></div>`;
+  }
+  html += `<div class="stat-box portfolio"><div class="lab" style="color:${MARK}">Portfolio</div><div class="num">μ ${current.ret.toFixed(2)}% · σ ${current.sd.toFixed(2)}%</div></div>`;
+  row.innerHTML = html;
+}
+
+function buildLegend(){
+  document.getElementById('legendRow').innerHTML =
+    NAMES.map((n,i)=>`<span><span class="sw" style="background:${ASSET_COLORS[i]}"></span>${n}</span>`).join('');
+}
+
+// ---------- main update ----------
+function update(){
+  const warn = document.getElementById('warnBox');
+  const Sigma = buildSigma(state.sd, state.rho);
+  if (!choleskyOK(Sigma)){
+    warn.textContent = '⚠ The correlation matrix is not positive definite with these values — no valid frontier exists. Adjust the correlations (typically: reduce very high off-diagonal values).';
+    clearSvg(document.getElementById('frontierChart'));
+    clearSvg(document.getElementById('weightChart'));
+    document.getElementById('statsRow').innerHTML='';
+    return;
+  }
+  warn.textContent = '';
+
+  const real = computeFrontier(state);
+  const envelope = computeFrontier(state, true);
+
+  const axisRetMin = Math.min(envelope.minRet, ...state.mu) - 1;
+  const axisRetMax = Math.max(envelope.maxRet, ...state.mu) + 1;
+  const envSdMax = envelope.frontier.length ? Math.max(...envelope.frontier.map(p=>p.sd)) : 0;
+  const axisSdMax = Math.max(...state.sd, envSdMax) * 1.1;
+
+  const targetSlider = document.getElementById('targetRet');
+  targetSlider.min = envelope.minRet.toFixed(3);
+  targetSlider.max = envelope.maxRet.toFixed(3);
+  const clamped = Math.max(real.minRet, Math.min(real.maxRet, state.targetRet));
+  targetSlider.value = clamped;
+  document.getElementById('targetRet_val').textContent = clamped.toFixed(2)+'%';
+
+  const current = solveQP(real.Sigma, state.mu, clamped, real.lb, real.ub);
+  const minVarPt = real.frontier.length ? real.frontier.reduce((a,b)=> b.sd<a.sd?b:a, real.frontier[0]) : null;
+
+  drawFrontier({ frontier:real.frontier, minVarPt, current, lb:real.lb, ub:real.ub, axisRetMin, axisRetMax, axisSdMax });
+  drawWeights({ frontier:real.frontier, axisRetMin, axisRetMax });
+  drawStats(current);
+}
+
+// ---------- wiring ----------
+buildTable();
+buildLegend();
+document.getElementById('allowShort').addEventListener('change', e=>{ state.allowShort = e.target.checked; update(); });
+document.getElementById('targetRet').addEventListener('input', e=>{ state.targetRet = parseFloat(e.target.value); update(); });
+document.getElementById('resetBtn').addEventListener('click', ()=>{
+  state = {
+    mu: DEFAULT_MU.slice(), sd: DEFAULT_SD.slice(), maxw: DEFAULT_MAXW.slice(),
+    rho: DEFAULT_RHO.map(r=>r.slice()), allowShort:false, targetRet:7.0
+  };
+  buildTable();
+  document.getElementById('allowShort').checked = false;
+  update();
+});
+update();
+</script>
+</body>
+</html>
